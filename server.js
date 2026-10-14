@@ -14,10 +14,18 @@ const { SOURCES, DEFAULT_COMPANIES } = await import('./lib/sources.js');
 const { ROLE_PRESETS, resolveRole } = await import('./lib/roles.js');
 const { enrichJob, SKILL_CATALOG } = await import('./lib/enrich.js');
 const { clearCache, normalizeKey } = await import('./lib/util.js');
+// Resume tools need the Anthropic SDK (npm install). Load them so the job search
+// still works if dependencies haven't been installed yet.
+let resumeLib = null;
+try {
+  resumeLib = await import('./lib/resume.js');
+} catch (e) {
+  console.warn(`  Resume tools disabled: ${e.message}\n  Run "npm install" to enable them.`);
+}
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC = path.join(ROOT, 'public');
-const DATA = path.join(ROOT, 'data');
+const DATA = process.env.JOBSCOUT_DATA_DIR ? path.resolve(process.env.JOBSCOUT_DATA_DIR) : path.join(ROOT, 'data');
 const STATE_FILE = path.join(DATA, 'state.json');
 const SEEN_FILE = path.join(DATA, 'seen.json');
 const SOURCE_TIMEOUT = 90_000;
@@ -134,7 +142,9 @@ async function runSearch({ roles = [], sources = [], location = '' }) {
   for (const r of results) {
     for (const j of r.jobs) {
       const description = (j.description || '').slice(0, MAX_DESCRIPTION);
-      all.push(enrichJob({ ...j, description, source: r.src.id, sourceName: r.src.name }));
+      // Aggregators (JSearch) say which site the posting came from, e.g. "LinkedIn via JSearch".
+      const sourceName = j.publisher ? `${j.publisher} via ${r.src.name.split(' ')[0]}` : r.src.name;
+      all.push(enrichJob({ ...j, description, source: r.src.id, sourceName }));
     }
   }
   const jobs = dedupe(all);
@@ -194,7 +204,30 @@ const server = http.createServer(async (req, res) => {
         })),
         skills: SKILL_CATALOG,
         defaultCompanies: DEFAULT_COMPANIES,
+        ai: {
+          installed: !!resumeLib,
+          configured: !!resumeLib?.aiConfigured(),
+          model: resumeLib?.AI_MODEL || null,
+        },
       });
+    }
+    if (url.pathname.startsWith('/api/resume/') && req.method === 'POST') {
+      if (!resumeLib) return send(res, 503, { error: 'Resume tools need dependencies — run "npm install" and restart.' });
+      const { resume = '', job = {}, tone } = await readBody(req);
+      if (!resume.trim()) return send(res, 400, { error: 'Add your resume first.' });
+      const action = url.pathname.slice('/api/resume/'.length);
+      if (action === 'analyze') return send(res, 200, resumeLib.analyzeResume(resume, job));
+      const ai = { suggest: resumeLib.suggestEdits, tailor: resumeLib.tailorResume, 'cover-letter': resumeLib.writeCoverLetter }[action];
+      if (!ai) return send(res, 404, { error: 'Not found' });
+      if (!resumeLib.aiConfigured()) {
+        return send(res, 400, { error: 'AI features need an Anthropic API key. Add ANTHROPIC_API_KEY to .env and restart the server.' });
+      }
+      try {
+        return send(res, 200, await ai(resume, job, tone));
+      } catch (e) {
+        console.error(`[resume/${action}]`, e);
+        return send(res, 502, { error: resumeLib.friendlyAiError(e) });
+      }
     }
     if (url.pathname === '/api/state' && req.method === 'GET') return send(res, 200, await readState());
     if (url.pathname === '/api/state' && req.method === 'PUT') {

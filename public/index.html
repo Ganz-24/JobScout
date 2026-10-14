@@ -16,6 +16,7 @@
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="discover" role="tab">Discover</button>
       <button class="tab" data-tab="tracker" role="tab">Tracker <span class="pill" id="trackerCount">0</span></button>
+      <button class="tab" data-tab="resume" role="tab">Resume</button>
       <button class="tab" data-tab="insights" role="tab">Insights</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </nav>
@@ -151,6 +152,51 @@
     </div>
     <div class="stat-row" id="trackerStats"></div>
     <div class="board" id="board"></div>
+  </main>
+
+  <!-- ============================== RESUME -->
+  <main id="tab-resume" class="tab-panel page">
+    <div class="page-head">
+      <div>
+        <h1>Resume studio</h1>
+        <p class="muted">Check your resume against a posting, get suggestions, and generate a tailored version.</p>
+      </div>
+      <span class="ai-status" id="aiStatus"></span>
+    </div>
+    <div class="resume-grid">
+      <section class="panel resume-editor">
+        <div class="panel-head">
+          <h2>Your resume</h2>
+          <div class="row gap">
+            <label class="btn small">Upload<input type="file" id="resumeUpload" accept=".pdf,.docx,.txt,.md" hidden /></label>
+            <button class="btn small" id="resumeNew">New</button>
+          </div>
+        </div>
+        <div class="row gap resume-pick">
+          <select id="resumeSelect" aria-label="Choose resume"></select>
+          <button class="icon-btn" id="resumeDefault" title="Use as default resume">☆</button>
+          <button class="icon-btn" id="resumeDelete" title="Delete this resume">🗑</button>
+        </div>
+        <input id="resumeName" placeholder="Resume name, e.g. Software Engineer — 2026" />
+        <textarea id="resumeText" spellcheck="true" placeholder="Paste your resume here, or upload a PDF, Word (.docx) or text file."></textarea>
+        <p class="hint" id="resumeMeta"></p>
+      </section>
+
+      <section class="panel resume-work">
+        <div class="field">
+          <span>Tailor for</span>
+          <select id="resumeJob"></select>
+        </div>
+        <div id="resumeJobCard"></div>
+        <div class="subtabs" role="tablist">
+          <button class="subtab on" data-sub="report">Match report</button>
+          <button class="subtab" data-sub="suggest">AI suggestions</button>
+          <button class="subtab" data-sub="tailor">Auto-tailor</button>
+          <button class="subtab" data-sub="cover">Cover letter</button>
+        </div>
+        <div id="resumeOut"></div>
+      </section>
+    </div>
   </main>
 
   <!-- ============================== INSIGHTS -->

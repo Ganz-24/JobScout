@@ -1,5 +1,7 @@
 // JobScout frontend. Plain JS, no build step.
 
+import { initResume } from './resume.js';
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -16,6 +18,7 @@ const DEFAULT_FILTERS = {
   sponsor: false, clearance: false, newOnly: false, exclude: '', excludeCo: '', sort: 'match',
 };
 const PAGE = 60;
+let resumeMod; // set in init()
 
 const S = {
   meta: null,
@@ -529,6 +532,14 @@ function renderDetail() {
     </div>` : ''}
 
     <div class="section">
+      <h2>Resume fit</h2>
+      <div id="resumeFit" class="resume-fit">${resumeMod.defaultResume()?.text.trim()
+        ? '<span class="muted small">Checking your resume…</span>'
+        : '<span class="muted small">Add your resume in the Resume tab to see how well it matches this posting.</span>'}</div>
+      <button class="btn small" data-act="tailor-resume">Tailor my resume for this job →</button>
+    </div>
+
+    <div class="section">
       <h2>Your notes</h2>
       <textarea class="notes" data-act="notes" placeholder="Recruiter name, referral, follow-up date…">${esc(t?.notes || '')}</textarea>
       ${t ? `<p class="hint">Saved ${fmtDate(t.savedAt)}${t.appliedAt ? ` · Applied ${fmtDate(t.appliedAt)}` : ''}</p>` : '<p class="hint">Typing a note saves this job to your tracker.</p>'}
@@ -551,6 +562,24 @@ function renderDetail() {
       ${descLong ? '<button class="link-btn" data-act="expand">Show full description</button>' : ''}
     </div>
   </div>`;
+  renderResumeFit(job);
+}
+
+// Instant (non-AI) check of the default resume against the open posting.
+async function renderResumeFit(job) {
+  const resume = resumeMod.defaultResume();
+  if (!resume?.text.trim()) return;
+  try {
+    const { title, company, skills, requirements } = job;
+    const a = await api('/api/resume/analyze', { method: 'POST', body: { resume: resume.text, job: { title, company, skills, requirements } } });
+    const el = $('#resumeFit');
+    if (!el || S.selectedId !== job.id) return;
+    el.innerHTML = `<div class="row gap">${matchRing(a.score)}
+      <div class="small">Your resume “${esc(resume.name)}” covers <b>${a.keywordScore ?? '—'}%</b> of this posting's skills.
+      ${a.skills.missing.length ? `<div class="muted">Missing from resume: ${a.skills.missing.slice(0, 8).map(esc).join(', ')}${a.skills.missing.length > 8 ? '…' : ''}</div>` : ''}</div></div>`;
+  } catch {
+    /* resume tools unavailable — leave the placeholder */
+  }
 }
 
 // ---------------------------------------------------------------- tracker actions
@@ -813,6 +842,7 @@ function showTab(name) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'tracker') renderTracker();
+  if (name === 'resume') resumeMod.show();
   if (name === 'insights') renderInsights();
   if (name === 'settings') renderSettings();
 }
@@ -954,6 +984,11 @@ function bindEvents() {
     const id = S.selectedId;
     if (act === 'hide') hideJob(id);
     if (act === 'close-detail') detail.classList.remove('open');
+    if (act === 'tailor-resume') {
+      showTab('resume');
+      resumeMod.show(id);
+      return;
+    }
     if (act === 'expand') {
       $('#descText').classList.remove('collapsed');
       e.target.remove();
@@ -1137,6 +1172,15 @@ function normalizeState() {
   st.profile.sources ||= S.meta.sources.filter((s) => !s.needsKey).map((s) => s.id);
   st.profile.filters = { ...structuredClone(DEFAULT_FILTERS), ...(st.profile.filters || {}) };
   st.profile.years ??= '';
+  // Switch on API sources the first time their key is configured (once, so the
+  // user can still turn them off afterwards).
+  st.profile.autoEnabled ||= [];
+  for (const s of S.meta.sources) {
+    if (s.needsKey && s.configured && !st.profile.autoEnabled.includes(s.id)) {
+      if (!st.profile.sources.includes(s.id)) st.profile.sources.push(s.id);
+      st.profile.autoEnabled.push(s.id);
+    }
+  }
   st.tracker ||= {};
   st.hidden ||= [];
   st.companies ||= structuredClone(S.meta.defaultCompanies);
@@ -1170,6 +1214,7 @@ async function init() {
   S.state.lastVisit = new Date().toISOString();
   persist();
   $('#skillCatalog').innerHTML = S.meta.skills.map((s) => `<option value="${esc(s.name)}">${esc(s.category)}</option>`).join('');
+  resumeMod = initResume({ S, $, $$, api, persist, esc, toast, findJob, safeUrl, download, showTab, selectJob });
   bindEvents();
   renderAll();
   if (profile().roles.length) search();

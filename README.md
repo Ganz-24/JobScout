@@ -6,9 +6,10 @@ you match, and tracks your applications.
 
 ## Run it
 
-Requires Node.js 18+ (no `npm install` needed — there are no dependencies).
+Requires Node.js 18+.
 
 ```bash
+npm install   # one dependency: the Anthropic SDK, used by the Resume tab's AI features
 npm start
 ```
 
@@ -45,6 +46,16 @@ Results are cached in memory for 20–30 minutes so repeat searches are fast. Us
 - **De-duplication**: the same job on several boards is merged ("Also listed on…").
 - **Application tracker**: a Kanban board (Saved → Applied → Interviewing → Offer / Rejected) with notes,
   drag and drop, response-rate stats and CSV export.
+- **Resume studio**: paste or upload your resume (PDF, Word, text), then pick any posting:
+  - *Match report* (free, instant): keyword match, which key requirements your resume covers, and resume health
+    checks (contact info, quantified bullets, weak phrasing, length).
+  - *AI suggestions*: fit score, strengths, gaps, missing keywords, bullet rewrites you can apply in one click,
+    and a tailored summary.
+  - *Auto-tailor*: a rewritten version for that posting, with a diff against your original, saved as a new
+    resume version, or downloaded as Markdown, text or PDF.
+  - *Cover letter* in your chosen tone.
+  The AI features use Claude (`ANTHROPIC_API_KEY` in `.env`) and are told never to invent experience; anything
+  the posting wants that your resume doesn't show is listed separately for you to decide on.
 - **Insights**: most requested skills, skills to learn next, salary by seniority, experience levels, and top hiring companies.
 - Keyboard shortcuts (`j`/`k`, `s`, `a`, `x`, `o`, `/`), dark mode, and a mobile layout.
 
