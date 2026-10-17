@@ -286,11 +286,17 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith('/api/resume/') && req.method === 'POST') {
       if (!resumeLib) return send(res, 503, { error: 'Resume tools need dependencies — run "npm install" and restart.' });
-      const { resume = '', job = {}, tone } = await readBody(req);
+      const { resume = '', job: rawJob, tone, instruction } = await readBody(req);
+      const job = rawJob || {};
       if (!resume.trim()) return send(res, 400, { error: 'Add your resume first.' });
       const action = url.pathname.slice('/api/resume/'.length);
       if (action === 'analyze') return send(res, 200, resumeLib.analyzeResume(resume, job));
-      const ai = { suggest: resumeLib.suggestEdits, tailor: resumeLib.tailorResume, 'cover-letter': resumeLib.writeCoverLetter }[action];
+      const ai = {
+        suggest: resumeLib.suggestEdits,
+        tailor: resumeLib.tailorResume,
+        'cover-letter': resumeLib.writeCoverLetter,
+        edit: (r, j) => resumeLib.editResume(r, j, instruction),
+      }[action];
       if (!ai) return send(res, 404, { error: 'Not found' });
       if (!resumeLib.aiConfigured()) {
         return send(res, 400, { error: 'AI features need an Anthropic API key. Add ANTHROPIC_API_KEY to .env and restart the server.' });

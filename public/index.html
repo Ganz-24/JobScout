@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>JobScout</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><circle cx='14' cy='14' r='6' fill='none' stroke='white' stroke-width='3'/><path d='M19 19l6 6' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,700;1,400&display=swap" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -205,6 +207,16 @@
           <div class="row gap">
             <label class="btn small">Upload<input type="file" id="resumeUpload" accept=".pdf,.docx,.txt,.md" hidden /></label>
             <button class="btn small" id="resumeNew">New</button>
+            <button class="btn small" id="resumeDup" title="Copy this resume into a new profile">Duplicate</button>
+            <div class="dl-wrap">
+              <button class="btn small primary" id="resumeDl">Download ▾</button>
+              <div class="dl-menu hidden" id="resumeDlMenu">
+                <button data-dl="pdf">PDF (for applications)</button>
+                <button data-dl="print">Print…</button>
+                <button data-dl="txt">Plain text (.txt)</button>
+                <button data-dl="md">Markdown (.md)</button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="row gap resume-pick">
@@ -212,8 +224,36 @@
           <button class="icon-btn" id="resumeDefault" title="Use as default resume">☆</button>
           <button class="icon-btn" id="resumeDelete" title="Delete this resume">🗑</button>
         </div>
-        <input id="resumeName" placeholder="Resume name, e.g. Software Engineer — 2026" />
-        <textarea id="resumeText" spellcheck="true" placeholder="Paste your resume here, or upload a PDF, Word (.docx) or text file."></textarea>
+        <input id="resumeName" placeholder="Profile name, e.g. Security internships — 2026" />
+        <div class="editor-bar">
+          <div class="segmented" id="editorMode"><button data-v="visual" class="on">Page</button><button data-v="text">Text</button></div>
+          <select id="tplSelect" aria-label="Template"></select>
+          <select id="tplSize" aria-label="Text size">
+            <option value="-1">Small text</option><option value="0">Normal text</option><option value="1">Large text</option>
+          </select>
+          <label class="accent-pick" title="Accent color"><input type="color" id="tplAccent" /></label>
+        </div>
+        <div class="format-bar" id="formatBar" role="toolbar" aria-label="Formatting">
+          <button data-fmt="h1" title="Name">Name</button>
+          <button data-fmt="h2" title="Section heading">Section</button>
+          <button data-fmt="h3" title="Role / school line (dates at the end are right-aligned)">Role</button>
+          <button data-fmt="p" title="Normal text">Text</button>
+          <button data-fmt="ul" title="Bullet list">• List</button>
+          <button data-fmt="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button data-fmt="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button data-fmt="undo" title="Undo (Ctrl+Z)">↶</button>
+          <button data-fmt="redo" title="Redo (Ctrl+Y)">↷</button>
+          <button data-fmt="autoformat" title="Detect name, sections, roles and bullets in plain text">Auto-format</button>
+        </div>
+        <form class="ai-edit" id="aiEditForm">
+          <input id="aiEditInput" placeholder="Ask AI to edit… e.g. “fit this on one page” or “emphasize my security experience”" autocomplete="off" />
+          <button class="btn small" type="submit" id="aiEditBtn">✨ Edit</button>
+          <button class="btn small hidden" type="button" id="aiUndoBtn" title="Undo the last AI edit">Undo AI edit</button>
+        </form>
+        <div class="paper-wrap" id="paperWrap">
+          <div class="resume-paper" id="resumePaper" contenteditable="true" spellcheck="true" aria-label="Resume page"></div>
+        </div>
+        <textarea id="resumeText" class="hidden" spellcheck="true" placeholder="Paste your resume here, or upload a PDF, Word (.docx) or text file."></textarea>
         <p class="hint" id="resumeMeta"></p>
       </section>
 

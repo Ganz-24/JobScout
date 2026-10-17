@@ -1,13 +1,16 @@
 // Resume studio: manage resumes, match-report against a posting, and Claude-powered
 // suggestions / auto-tailoring / cover letters.
 
+import { resumeToHtml, htmlToResume, autoFormat, applyPageStyle, downloadPdf, toPlainText, TEMPLATES, DEFAULT_STYLE } from './resume-doc.js';
+
 const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const MAMMOTH = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js';
 
 export function initResume(ctx) {
   const { S, $, $$, api, persist, esc, toast, findJob, safeUrl, download, showTab, selectJob } = ctx;
-  const R = { sub: 'report', jobId: null, busy: null, analyzeTimer: null, showDiff: false };
+  const R = { sub: 'report', jobId: null, busy: null, analyzeTimer: null, showDiff: false, undo: null, syncTimer: null };
+  try { R.mode = localStorage.getItem('resumeEditorMode') || 'visual'; } catch { R.mode = 'visual'; }
 
   // ---------------------------------------------------------------- state helpers
 
@@ -27,8 +30,9 @@ export function initResume(ctx) {
     const { title, company, location, seniority, skills, requirements, description } = job;
     return { title, company, location, seniority, skills, requirements, description };
   }
-  function newResume(name = 'Untitled resume', text = '') {
-    const r = { id: `r${Date.now().toString(36)}`, name, text, updatedAt: new Date().toISOString() };
+  function newResume(name = 'Untitled resume', text = '', style = null) {
+    const r = { id: `r${Date.now().toString(36)}`, name, text, updatedAt: new Date().toISOString(),
+      style: { ...DEFAULT_STYLE, ...(style || {}) }, autoFormatted: true };
     resumes().push(r);
     S.state.activeResumeId = r.id;
     if (!S.state.defaultResumeId) S.state.defaultResumeId = r.id;
@@ -51,14 +55,98 @@ export function initResume(ctx) {
     $('#resumeDefault').textContent = cur && cur.id === S.state.defaultResumeId ? '★' : '☆';
     $('#resumeDefault').classList.toggle('on', !!cur && cur.id === S.state.defaultResumeId);
     $('#resumeDelete').disabled = !cur;
+    renderStyleControls();
+    renderPage();
     renderMeta();
+  }
+
+  // ---------------------------------------------------------------- page editor
+
+  function renderStyleControls() {
+    const st = { ...DEFAULT_STYLE, ...(current()?.style || {}) };
+    $('#tplSelect').innerHTML = Object.entries(TEMPLATES).map(([id, t]) => `<option value="${id}" ${id === st.template ? 'selected' : ''}>${t.label} template</option>`).join('');
+    $('#tplSize').value = String(st.size || 0);
+    $('#tplAccent').value = st.accent;
+    for (const el of ['#tplSelect', '#tplSize', '#tplAccent', '#resumeDup', '#resumeDl']) $(el).disabled = !current();
+    $$('#editorMode button').forEach((b) => b.classList.toggle('on', b.dataset.v === R.mode));
+    const visual = R.mode === 'visual';
+    $('#paperWrap').classList.toggle('hidden', !visual);
+    $('#formatBar').classList.toggle('hidden', !visual);
+    $('#resumeText').classList.toggle('hidden', visual);
+    $('#aiUndoBtn').classList.toggle('hidden', !(R.undo && R.undo.id === current()?.id));
+    if (R.undo) $('#aiUndoBtn').textContent = R.undo.label;
+  }
+
+  // Draw the resume onto the page (skipped while you're typing in it, so the caret doesn't jump).
+  function renderPage({ force = false } = {}) {
+    const cur = current();
+    const paper = $('#resumePaper');
+    if (R.mode !== 'visual') return;
+    if (cur && cur.text.trim() && !cur.autoFormatted && !/^#{1,3}\s/m.test(cur.text)) {
+      // Older resumes are plain text: detect name / sections / roles / bullets once, with an undo.
+      R.undo = { id: cur.id, text: cur.text, label: 'Undo auto-format' };
+      cur.text = autoFormat(cur.text);
+      cur.autoFormatted = true;
+      persist();
+      $('#aiUndoBtn').classList.remove('hidden');
+      $('#aiUndoBtn').textContent = R.undo.label;
+    }
+    if (document.activeElement === paper && !force) return;
+    paper.innerHTML = cur ? resumeToHtml(cur.text) : '';
+    paper.contentEditable = cur ? 'true' : 'false';
+    applyPageStyle(paper, cur?.style);
+    fitPaper();
+  }
+
+  // Scale the real-size page to fit the panel.
+  function fitPaper() {
+    const wrap = $('#paperWrap');
+    const paper = $('#resumePaper');
+    if (!wrap.clientWidth) return;
+    const zoom = Math.min(1, (wrap.clientWidth - 32) / 816);
+    paper.style.zoom = zoom.toFixed(3);
+    renderMeta();
+  }
+
+  function pageCount() {
+    const paper = $('#resumePaper');
+    if (R.mode !== 'visual' || !paper.offsetHeight) return null;
+    return Math.max(1, Math.ceil((paper.offsetHeight - 2) / 1056));
+  }
+
+  // Read the edited page back into the resume text (debounced).
+  function syncFromPaper() {
+    clearTimeout(R.syncTimer);
+    R.syncTimer = setTimeout(() => {
+      const cur = current();
+      if (!cur) return;
+      cur.text = htmlToResume($('#resumePaper'));
+      cur.updatedAt = new Date().toISOString();
+      persist();
+      renderMeta();
+      clearTimeout(R.analyzeTimer);
+      R.analyzeTimer = setTimeout(() => { if (R.sub === 'report') renderOut(); }, 700);
+    }, 250);
+  }
+
+  function setStyle(patch) {
+    const cur = current();
+    if (!cur) return;
+    cur.style = { ...DEFAULT_STYLE, ...(cur.style || {}), ...patch };
+    persist();
+    applyPageStyle($('#resumePaper'), cur.style);
+    renderMeta();
+  }
+
+  function fileBaseFor(r) {
+    return (r?.name || 'resume').replace(/[^\w\s.-]+/g, '').trim().replace(/\s+/g, '-') || 'resume';
   }
 
   function renderMeta() {
     const cur = current();
     const words = (cur?.text.match(/\S+/g) || []).length;
     $('#resumeMeta').textContent = cur
-      ? `${words.toLocaleString()} words · saved ${new Date(cur.updatedAt).toLocaleString()}${cur.basedOn ? ` · tailored for ${cur.basedOn}` : ''}`
+      ? `${pageCount() ? `${pageCount()} page${pageCount() > 1 ? 's' : ''} · ` : ''}${words.toLocaleString()} words · saved ${new Date(cur.updatedAt).toLocaleString()}${cur.basedOn ? ` · tailored for ${cur.basedOn}` : ''}${pageCount() > 1 ? ' · red lines mark page breaks' : ''}`
       : 'Paste your resume to get started — it stays on this computer (data/state.json).';
   }
 
@@ -324,7 +412,8 @@ export function initResume(ctx) {
           <button class="btn small" data-r="copy-tailored">Copy</button>
           <button class="btn small" data-r="dl-md">Download .md</button>
           <button class="btn small" data-r="dl-txt">Download .txt</button>
-          <button class="btn small" data-r="print">Print / save PDF</button>
+          <button class="btn small" data-r="dl-pdf">Download PDF</button>
+          <button class="btn small" data-r="print">Print</button>
         </div>
         ${R.showDiff ? `<div class="diff">${diffHtml(current().text, text)}</div>`
           : `<textarea class="tailored" id="tailoredText">${esc(text)}</textarea>`}
@@ -370,36 +459,22 @@ export function initResume(ctx) {
       + '<p class="hint">Green lines are new or rewritten; red lines were removed or replaced.</p>';
   }
 
-  function mdToHtml(md) {
-    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\*(.+?)\*/g, '<em>$1</em>');
-    let html = '';
-    let inList = false;
-    for (const raw of md.split('\n')) {
-      const line = raw.trimEnd();
-      const li = line.match(/^\s*[-*•]\s+(.*)/);
-      if (li) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
-      if (inList) { html += '</ul>'; inList = false; }
-      const h = line.match(/^(#{1,3})\s+(.*)/);
-      if (h) html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
-      else if (line.trim()) html += `<p>${inline(line)}</p>`;
-    }
-    return html + (inList ? '</ul>' : '');
-  }
-
-  function printResume(md, title) {
+  function printResume(md, style, title) {
     const w = window.open('', '_blank');
     if (!w) return toast('Allow pop-ups to print');
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
-      body{font:10.5pt/1.4 Georgia,'Times New Roman',serif;color:#111;max-width:7.5in;margin:0.5in auto;padding:0 0.25in}
-      h1{font-size:20pt;margin:0 0 2pt;text-align:center} h1+p{text-align:center;margin:0 0 8pt;color:#333}
-      h2{font-size:11pt;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid #999;margin:12pt 0 4pt;padding-bottom:2pt}
-      h3{font-size:10.5pt;margin:8pt 0 2pt} p{margin:2pt 0} ul{margin:2pt 0 4pt;padding-left:16pt} li{margin:1pt 0}
-      @page{margin:0.5in} @media print{body{margin:0 auto}}
-    </style></head><body>${mdToHtml(md)}<script>window.onload=()=>window.print()<\/script></body></html>`);
+    const holder = document.createElement('div');
+    applyPageStyle(holder, style);
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,700;1,400&display=swap">
+      <link rel="stylesheet" href="${location.origin}/styles.css">
+      <style>@page{size:letter;margin:0} html,body{background:#fff!important;margin:0}
+        .resume-paper{box-shadow:none!important;background-image:none!important;margin:0!important;min-height:0}</style>
+      </head><body><div class="resume-paper" data-template="${holder.dataset.template}" style="${holder.getAttribute('style') || ''}">${resumeToHtml(md)}</div>
+      <script>document.fonts.ready.then(() => setTimeout(() => window.print(), 300))<\/script></body></html>`);
     w.document.close();
   }
 
-  const stripMd = (md) => md.replace(/^#{1,3}\s+/gm, '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/^\s*[-*]\s+/gm, '• ');
+  const stripMd = (md) => toPlainText(md);
   const fileBase = () => {
     const job = findJob(R.jobId);
     return `resume-${(job?.company || 'tailored').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
@@ -436,7 +511,7 @@ export function initResume(ctx) {
     newResume();
     renderEditor();
     renderOut();
-    $('#resumeText').focus();
+    (R.mode === 'visual' ? $('#resumePaper') : $('#resumeText')).focus();
   });
   $('#resumeDelete').addEventListener('click', () => {
     const cur = current();
@@ -465,10 +540,10 @@ export function initResume(ctx) {
     try {
       const text = await fileToText(file);
       if (!text.trim()) throw new Error('No text found — if it is a scanned PDF, paste the text instead');
-      newResume(file.name.replace(/\.[^.]+$/, ''), text);
+      newResume(file.name.replace(/\.[^.]+$/, ''), autoFormat(text));
       renderEditor();
       renderOut();
-      toast('Resume imported — check the text for formatting issues');
+      toast('Resume imported — check the page and use the toolbar to fix any formatting');
     } catch (err) {
       toast(`Import failed: ${err.message}`);
     }
@@ -519,17 +594,18 @@ export function initResume(ctx) {
     if (act === 'save-version') {
       const job = findJob(R.jobId);
       const base = current();
-      const r = newResume(`${base.name} → ${job.company || job.title}`, tailored());
+      const r = newResume(`${base.name} → ${job.company || job.title}`, tailored(), base.style);
       r.basedOn = `${job.title} at ${job.company}`;
       persist();
       renderEditor();
       renderOut();
-      return toast('Saved as a new resume — it is now selected on the left');
+      return toast('Saved as a new resume profile — it is open in the editor on the left');
     }
     if (act === 'copy-tailored') return navigator.clipboard.writeText(tailored()).then(() => toast('Copied'));
     if (act === 'dl-md') return download(`${fileBase()}.md`, tailored(), 'text/markdown');
     if (act === 'dl-txt') return download(`${fileBase()}.txt`, stripMd(tailored()), 'text/plain');
-    if (act === 'print') return printResume(tailored(), fileBase());
+    if (act === 'print') return printResume(tailored(), current()?.style, fileBase());
+    if (act === 'dl-pdf') return downloadPdf(tailored(), current()?.style, fileBase()).catch((err) => toast(err.message));
     const cover = () => $('#coverText')?.value ?? '';
     if (act === 'copy-cover') return navigator.clipboard.writeText(cover()).then(() => toast('Copied'));
     if (act === 'dl-cover') return download(`cover-letter-${fileBase().slice(7)}.txt`, cover(), 'text/plain');
@@ -540,6 +616,144 @@ export function initResume(ctx) {
     if (e.target.id === 'tailoredText' && entry?.tailor) { entry.tailor.draft = e.target.value; persist(); }
     if (e.target.id === 'coverText' && entry?.cover) { entry.cover.draft = e.target.value; persist(); }
   });
+
+  // ---------------------------------------------------------------- page editor events
+
+  $$('#editorMode button').forEach((b) => b.addEventListener('click', () => {
+    const cur = current();
+    // Carry unsaved page edits over before switching views.
+    if (cur && R.mode === 'visual') { clearTimeout(R.syncTimer); cur.text = htmlToResume($('#resumePaper')); persist(); }
+    if (cur) $('#resumeText').value = cur.text;
+    R.mode = b.dataset.v;
+    try { localStorage.setItem('resumeEditorMode', R.mode); } catch { /* storage unavailable */ }
+    renderStyleControls();
+    renderPage({ force: true });
+    renderMeta();
+  }));
+  $('#tplSelect').addEventListener('change', (e) => setStyle({ template: e.target.value }));
+  $('#tplSize').addEventListener('change', (e) => setStyle({ size: Number(e.target.value) }));
+  $('#tplAccent').addEventListener('input', (e) => setStyle({ accent: e.target.value }));
+
+  const paper = $('#resumePaper');
+  paper.addEventListener('focus', () => document.execCommand('defaultParagraphSeparator', false, 'p'));
+  paper.addEventListener('input', () => {
+    if (!current()) newResume('My resume', '');
+    syncFromPaper();
+  });
+  // Paste as plain text; pasting a whole resume into an empty page is auto-formatted.
+  paper.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+    if (text.includes('\n') && !paper.textContent.trim()) {
+      paper.innerHTML = resumeToHtml(autoFormat(text));
+    } else {
+      document.execCommand('insertText', false, text.replace(/\s*\n\s*/g, ' '));
+    }
+    syncFromPaper();
+  });
+  paper.addEventListener('blur', () => {
+    clearTimeout(R.syncTimer);
+    const cur = current();
+    if (!cur) return;
+    const text = htmlToResume(paper);
+    if (text !== cur.text) { cur.text = text; cur.updatedAt = new Date().toISOString(); persist(); }
+    renderMeta();
+  });
+
+  const formatBar = $('#formatBar');
+  formatBar.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); }); // keep the selection
+  formatBar.addEventListener('click', (e) => {
+    const fmt = e.target.closest('[data-fmt]')?.dataset.fmt;
+    if (!fmt) return;
+    if (fmt === 'autoformat') {
+      const cur = current();
+      if (!cur) return;
+      R.undo = { id: cur.id, text: cur.text, label: 'Undo auto-format' };
+      cur.text = autoFormat(htmlToResume(paper).replace(/^#{1,3}\s+/gm, ''));
+      persist();
+      renderStyleControls();
+      return renderPage({ force: true });
+    }
+    paper.focus();
+    if (['h1', 'h2', 'h3', 'p'].includes(fmt)) document.execCommand('formatBlock', false, fmt === 'p' ? 'P' : fmt.toUpperCase());
+    else if (fmt === 'ul') document.execCommand('insertUnorderedList');
+    else document.execCommand(fmt);
+    syncFromPaper();
+  });
+
+  $('#resumeDup').addEventListener('click', () => {
+    const cur = current();
+    if (!cur) return;
+    newResume(`${cur.name} (copy)`, cur.text, cur.style);
+    renderEditor();
+    renderOut();
+    toast('Duplicated — edit this copy for a different kind of application');
+  });
+
+  const dlMenu = $('#resumeDlMenu');
+  $('#resumeDl').addEventListener('click', (e) => { e.stopPropagation(); dlMenu.classList.toggle('hidden'); });
+  document.addEventListener('click', (e) => { if (!dlMenu.contains(e.target)) dlMenu.classList.add('hidden'); });
+  dlMenu.addEventListener('click', async (e) => {
+    const kind = e.target.closest('[data-dl]')?.dataset.dl;
+    const cur = current();
+    if (!kind || !cur) return;
+    dlMenu.classList.add('hidden');
+    if (R.mode === 'visual') cur.text = htmlToResume(paper);
+    const base = fileBaseFor(cur);
+    if (kind === 'pdf') {
+      toast('Preparing PDF…');
+      try { await downloadPdf(cur.text, cur.style, base); } catch (err) { toast(`PDF failed: ${err.message}`); }
+    }
+    if (kind === 'print') printResume(cur.text, cur.style, base);
+    if (kind === 'txt') download(`${base}.txt`, toPlainText(cur.text), 'text/plain');
+    if (kind === 'md') download(`${base}.md`, cur.text, 'text/markdown');
+  });
+
+  // Ask Claude to edit the resume in place, with a one-step undo.
+  $('#aiEditForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const instruction = $('#aiEditInput').value.trim();
+    const cur = current();
+    if (!instruction || !cur) return;
+    if (!S.meta.ai?.configured) return toast('AI editing needs ANTHROPIC_API_KEY in .env (then restart the server)');
+    if (R.mode === 'visual') cur.text = htmlToResume(paper);
+    const btn = $('#aiEditBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner dark"></span> Editing…';
+    try {
+      const job = findJob(R.jobId);
+      const res = await api('/api/resume/edit', { method: 'POST', body: { resume: cur.text, instruction, job: job ? slimJob(job) : null } });
+      R.undo = { id: cur.id, text: cur.text, label: 'Undo AI edit' };
+      cur.text = res.resume;
+      cur.autoFormatted = true;
+      cur.updatedAt = new Date().toISOString();
+      persist();
+      $('#aiEditInput').value = '';
+      renderStyleControls();
+      renderPage({ force: true });
+      renderOut();
+      toast(res.changes?.length ? `Done: ${res.changes.slice(0, 2).join('; ')}` : 'Resume updated');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✨ Edit';
+    }
+  });
+  $('#aiUndoBtn').addEventListener('click', () => {
+    const cur = current();
+    if (!R.undo || !cur || R.undo.id !== cur.id) return;
+    cur.text = R.undo.text;
+    cur.updatedAt = new Date().toISOString();
+    R.undo = null;
+    persist();
+    renderStyleControls();
+    renderPage({ force: true });
+    renderOut();
+    toast('Undone');
+  });
+  window.addEventListener('resize', () => { if ($('#tab-resume').classList.contains('active')) fitPaper(); });
 
   // ---------------------------------------------------------------- public
 

@@ -59,6 +59,11 @@ Results are cached in memory for 20–30 minutes so repeat searches are fast. Us
   "No longer listed", and you can still read them. Your latest search is also reopened automatically on launch.
 - **Application tracker**: a Kanban board (Saved → Applied → Interviewing → Offer / Rejected) with notes,
   drag and drop, response-rate stats and CSV export.
+- **Resume editor**: your resume shown as a real letter-size page you can edit directly (toolbar for name,
+  sections, roles, bullets, bold/italic), with Classic / Modern / Compact templates, accent color, text size and
+  page-break markers. Keep several resume profiles (duplicate one per kind of application) and download any of them
+  as a text-based PDF (readable by applicant-tracking systems), plain text or Markdown. "Ask AI to edit" applies
+  instructions like "fit this on one page" (needs `ANTHROPIC_API_KEY`), with undo.
 - **Resume studio**: paste or upload your resume (PDF, Word, text), then pick any posting:
   - *Match report* (free, instant): keyword match, which key requirements your resume covers, and resume health
     checks (contact info, quantified bullets, weak phrasing, length).

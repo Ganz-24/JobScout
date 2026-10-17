@@ -511,3 +511,46 @@ body.density-compact .match span { font-size: 10px; }
   .resizer { display: none; }
   #tab-discover { grid-template-columns: 1fr !important; }
 }
+
+/* ---------------------------------------------------------------- resume page editor */
+.resume-grid { grid-template-columns: minmax(0, 1.15fr) minmax(360px, 1fr); }
+.editor-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.editor-bar select { width: auto; font-size: 13px; padding: 5px 8px; }
+.editor-bar .segmented { width: 150px; }
+.accent-pick input { width: 34px; height: 30px; padding: 2px; cursor: pointer; }
+.format-bar { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; background: var(--surface-2); border-radius: 8px; }
+.format-bar button { font: inherit; font-size: 12.5px; border: 0; background: none; color: var(--text-2); padding: 4px 9px; border-radius: 6px; cursor: pointer; }
+.format-bar button:hover { background: var(--surface); color: var(--text); }
+.format-bar [data-fmt="autoformat"] { margin-left: auto; color: var(--accent); }
+.ai-edit { display: flex; gap: 6px; }
+.ai-edit input { flex: 1; }
+.dl-wrap { position: relative; }
+.dl-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 200px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-lg); }
+.dl-menu button { display: block; width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 7px 10px; border: 0; background: none; color: var(--text); border-radius: 6px; cursor: pointer; }
+.dl-menu button:hover { background: var(--surface-2); }
+
+/* The page: US Letter at real size, scaled to fit the panel with CSS zoom. */
+.paper-wrap { background: var(--surface-2); border-radius: 8px; padding: 16px; overflow: auto; max-height: calc(100vh - 300px); }
+.resume-paper {
+  --r-accent: #1f3a8a; --r-base: 10.5pt; --r-name: 20pt; --r-gap: 1; --r-name-align: center;
+  box-sizing: border-box; width: 8.5in; min-height: 11in; margin: 0 auto; padding: 34pt 36pt;
+  background: #fff; color: #111; font-family: Roboto, Arial, sans-serif; font-size: var(--r-base); line-height: 1.18;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25); outline: none; cursor: text;
+  /* red line at each page boundary */
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(11in - 1px), rgba(225, 29, 72, 0.55) calc(11in - 1px), rgba(225, 29, 72, 0.55) 11in);
+}
+.resume-paper:focus { box-shadow: 0 0 0 2px var(--accent), 0 2px 12px rgba(0, 0, 0, 0.25); }
+.resume-paper h1 { font-size: var(--r-name); font-weight: 700; text-align: var(--r-name-align); margin: 0 0 2pt; letter-spacing: 0; color: #111; }
+.resume-paper h1 + p { text-align: var(--r-name-align); color: #333; margin-bottom: 4pt; }
+.resume-paper h2 { font-size: calc(var(--r-base) + 0.5pt); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #111;
+  margin: calc(9pt * var(--r-gap)) 0 calc(4pt * var(--r-gap)); padding-bottom: 1pt; }
+.resume-paper h3 { font-size: var(--r-base); font-weight: 700; margin: calc(4pt * var(--r-gap)) 0 1pt; display: flex; gap: 12px; justify-content: space-between; color: #111; }
+.resume-paper h3 .date { font-weight: 400; font-style: italic; color: #444; white-space: nowrap; }
+.resume-paper p { margin: 1pt 0 calc(2pt * var(--r-gap)); }
+.resume-paper ul { margin: calc(1pt * var(--r-gap)) 0 calc(3pt * var(--r-gap)); padding-left: 14pt; }
+.resume-paper li { margin: calc(0.5pt * var(--r-gap)) 0; }
+.resume-paper[data-template="classic"] h2, .resume-paper[data-template="compact"] h2 { border-bottom: 0.7pt solid #555; }
+.resume-paper[data-template="modern"] h1 { color: var(--r-accent); }
+.resume-paper[data-template="modern"] h2, .resume-paper[data-template="compact"] h2 { color: var(--r-accent); border-color: var(--r-accent); }
+.resume-paper:empty::before { content: "Paste or type your resume here, or upload a file. Use the toolbar to mark your name, section headings, roles and bullet points."; color: #999; }
