@@ -14,7 +14,7 @@ const STATUSES = [
 ];
 const SENIORITIES = ['Intern', 'Entry', 'Mid', 'Senior', 'Staff', 'Lead', 'Principal', 'Manager', 'Director', 'Executive'];
 const DEFAULT_FILTERS = {
-  location: '', workplace: 'any', posted: '0', seniority: [], minSalary: '', hasSalary: false,
+  location: '', workplace: 'any', companyType: 'any', stage: 'any', posted: '0', seniority: [], minSalary: '', hasSalary: false,
   sponsor: false, clearance: false, newOnly: false, exclude: '', excludeCo: '', sort: 'match',
 };
 const PAGE = 60;
@@ -168,7 +168,15 @@ function applyFilters() {
   const out = [];
   for (const j of S.jobs) {
     if (hidden.has(j.id)) continue;
+    if (S.onlyRemoved && !j.removed) continue;
     if (f.workplace !== 'any' && j.workplace !== f.workplace) continue;
+    if (f.companyType === 'startup' && j.startup !== true) continue;
+    if (f.companyType === 'established' && j.startup !== false) continue;
+    if (f.companyType !== 'established' && f.stage !== 'any') {
+      const st = (j.companyStage || '').toLowerCase();
+      if (f.stage === 'early' && !/pre-seed|^seed|series a|^yc/.test(st)) continue;
+      if (f.stage === 'growth' && !/series [b-e]|growth|late/.test(st)) continue;
+    }
     if (locTerms.length) {
       const loc = (j.location || '').toLowerCase();
       const ok = locTerms.some((t) => loc.includes(t) || (t === 'remote' && j.workplace === 'Remote'));
@@ -273,6 +281,9 @@ function renderFilterControls() {
   const f = filters();
   $('#fLocation').value = f.location;
   $$('#fWorkplace button').forEach((b) => b.classList.toggle('on', b.dataset.v === f.workplace));
+  $$('#fCompanyType button').forEach((b) => b.classList.toggle('on', b.dataset.v === f.companyType));
+  $('#fStage').value = f.stage;
+  $('#fStageWrap').classList.toggle('hidden', f.companyType === 'established');
   $('#fPosted').value = f.posted;
   $('#fSeniority').innerHTML = [...SENIORITIES, 'Unspecified']
     .map((s) => `<button class="chip ${f.seniority.includes(s) ? 'on' : ''}" data-sen="${s}">${s}</button>`).join('');
@@ -314,16 +325,28 @@ async function search({ force = false } = {}) {
   $('#sourceStrip').innerHTML = '';
 
   try {
-    if (force) await api('/api/refresh', { method: 'POST' });
+    if (force) {
+      // Only re-fetch quota-limited APIs (JSearch etc.) if the user agrees to spend requests.
+      const paid = S.meta.sources.filter((s) => s.needsKey && s.configured && sources.includes(s.id));
+      const includePaid = paid.length > 0 && confirm(
+        `Also re-fetch ${paid.map((s) => s.name.split(' ')[0]).join(', ')}?\n\n` +
+        `This uses about ${profile().roles.length} request(s) of your monthly quota per source. ` +
+        'Click Cancel to refresh only the free sources and keep the cached paid results.',
+      );
+      await api('/api/refresh', { method: 'POST', body: { includePaid } });
+    }
     const res = await api('/api/search', {
       method: 'POST',
-      body: { roles: profile().roles, sources, location: filters().location },
+      body: { roles: profile().roles, sources, location: filters().location, levels: filters().seniority },
     });
     // "New" = first seen after the user's previous visit (nothing is new on the very first visit).
     for (const j of res.jobs) j.isNew = !!S.sinceVisit && j.firstSeen > S.sinceVisit;
     S.jobs = res.jobs;
     S.sourceResults = res.sources;
     S.fetchedAt = res.fetchedAt;
+    S.restored = false;
+    S.snapshot = null;
+    S.onlyRemoved = false;
     refresh({ resetPage: true });
     const fresh = res.jobs.filter((j) => j.isNew).length;
     toast(`Found ${res.jobs.length.toLocaleString()} postings${fresh ? ` · ${fresh} new` : ''}`);
@@ -375,6 +398,8 @@ function cardHtml(job) {
       ${matchRing(m.score)}
       <div class="row gap">
         ${job.isNew ? '<span class="badge new">New</span>' : ''}
+        ${job.removed ? '<span class="badge removed" title="Not found in your latest search — the posting may have been taken down">No longer listed</span>' : ''}
+        ${job.startup ? `<span class="badge startup" title="Startup">🚀 ${esc(job.companyStage || 'Startup')}</span>` : ''}
         ${job.workplace ? `<span class="badge wp">${esc(job.workplace)}</span>` : ''}
         ${t ? `<span class="badge status">${esc(STATUSES.find((s) => s.id === t.status)?.label)}</span>` : ''}
       </div>
@@ -388,6 +413,7 @@ function cardHtml(job) {
 
 function renderResults() {
   renderSourceStrip();
+  renderSnapshotBanner();
   const total = S.jobs.length;
   const shown = S.filtered.length;
   if (!total) {
@@ -402,7 +428,11 @@ function renderResults() {
   $('#resultsTitle').textContent = `${shown.toLocaleString()} matching postings`;
   const newCount = S.filtered.filter((j) => j.isNew).length;
   $('#resultsSub').textContent = `${total.toLocaleString()} found across ${S.sourceResults.filter((s) => s.count).length} sources` +
-    `${newCount ? ` · ${newCount} new` : ''} · updated ${timeAgo(S.fetchedAt)}`;
+    `${newCount ? ` · ${newCount} new` : ''} · ${S.snapshot
+      ? `snapshot of a search from ${fmtDate(S.fetchedAt)}`
+      : S.restored
+      ? `from your last search ${timeAgo(S.fetchedAt)} — click Search jobs to update`
+      : `updated ${timeAgo(S.fetchedAt)}`}`;
 
   if (!shown) {
     $('#jobList').innerHTML = '<div class="empty"><b>Nothing matches your filters</b>Loosen a filter or reset them.</div>';
@@ -437,6 +467,110 @@ function selectJob(id, { scroll = false } = {}) {
   renderDetail();
   $('#detail').classList.add('open');
   $('#detail').scrollTop = 0;
+  applyLayout();
+}
+
+function closeDetail() {
+  if (S.selectedId) $(`.job-card[data-id="${CSS.escape(S.selectedId)}"]`)?.classList.remove('active');
+  S.selectedId = null;
+  $('#detail').classList.remove('open');
+  renderDetail();
+  applyLayout();
+}
+
+// ---------------------------------------------------------------- layout
+
+// Per-browser layout preferences (kept in localStorage; the app works fine without it).
+const LAYOUT_DEFAULTS = { detail: 'auto', filters: 'show', density: 'comfortable', filtersW: 300, detailW: 560 };
+let layout = { ...LAYOUT_DEFAULTS };
+try { layout = { ...LAYOUT_DEFAULTS, ...JSON.parse(localStorage.getItem('layout') || '{}') }; } catch { /* storage unavailable */ }
+function saveLayout() {
+  try { localStorage.setItem('layout', JSON.stringify(layout)); } catch { /* storage unavailable */ }
+}
+const clamp = (v, lo, hi) => Math.round(Math.min(Math.max(v, lo), Math.max(lo, hi)));
+
+function applyLayout() {
+  const narrow = matchMedia('(max-width: 1200px)').matches;
+  const mobile = matchMedia('(max-width: 760px)').matches;
+  const drawer = layout.detail === 'drawer' || narrow;
+  const hideDetail = !drawer && layout.detail === 'auto' && !findJob(S.selectedId);
+  const body = document.body;
+  body.classList.toggle('detail-drawer', drawer);
+  body.classList.toggle('detail-hidden', hideDetail);
+  body.classList.toggle('filters-hidden', layout.filters === 'hidden');
+  body.classList.toggle('density-compact', layout.density === 'compact');
+  const filtersW = clamp(layout.filtersW, 220, 480);
+  const detailW = clamp(layout.detailW, 340, window.innerWidth - (layout.filters === 'hidden' ? 0 : filtersW) - 380);
+  document.documentElement.style.setProperty('--detail-w', `${detailW}px`);
+  const cols = [];
+  if (layout.filters !== 'hidden') cols.push(`${filtersW}px`, '6px');
+  cols.push('minmax(320px, 1fr)');
+  if (!drawer && !hideDetail) cols.push('6px', `${detailW}px`);
+  $('#tab-discover').style.gridTemplateColumns = mobile ? '' : cols.join(' ');
+  for (const seg of $$('#layoutMenu [data-layout]')) {
+    for (const b of seg.querySelectorAll('button')) b.classList.toggle('on', b.dataset.v === layout[seg.dataset.layout]);
+  }
+  $('#filtersToggle').classList.toggle('on', layout.filters !== 'hidden');
+}
+
+function setLayout(patch) {
+  Object.assign(layout, patch);
+  saveLayout();
+  applyLayout();
+}
+
+function bindLayout() {
+  const menu = $('#layoutMenu');
+  const btn = $('#layoutBtn');
+  const toggleMenu = (open) => {
+    menu.classList.toggle('hidden', !open);
+    btn.setAttribute('aria-expanded', String(open));
+  };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(menu.classList.contains('hidden')); });
+  document.addEventListener('click', (e) => { if (!menu.contains(e.target) && e.target !== btn) toggleMenu(false); });
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-layout] button');
+    if (b) setLayout({ [b.closest('[data-layout]').dataset.layout]: b.dataset.v });
+    if (e.target.id === 'layoutReset') setLayout({ ...LAYOUT_DEFAULTS });
+  });
+  $('#filtersToggle').addEventListener('click', () => setLayout({ filters: layout.filters === 'hidden' ? 'show' : 'hidden' }));
+
+  // Drag (or arrow-key) the dividers to resize columns; double-click resets that column.
+  for (const r of $$('.resizer')) {
+    const which = r.dataset.resize;
+    const widthAt = (x) => (which === 'filters'
+      ? x - $('#tab-discover').getBoundingClientRect().left
+      : window.innerWidth - x);
+    const set = (w) => setLayout(which === 'filters' ? { filtersW: w } : { detailW: w });
+    r.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      r.setPointerCapture(e.pointerId);
+      r.classList.add('active');
+      document.body.classList.add('resizing');
+      const move = (ev) => {
+        if (which === 'filters') layout.filtersW = clamp(widthAt(ev.clientX), 220, 480);
+        else layout.detailW = clamp(widthAt(ev.clientX), 340, window.innerWidth - 400);
+        applyLayout();
+      };
+      const up = () => {
+        r.removeEventListener('pointermove', move);
+        r.removeEventListener('pointerup', up);
+        r.classList.remove('active');
+        document.body.classList.remove('resizing');
+        saveLayout();
+      };
+      r.addEventListener('pointermove', move);
+      r.addEventListener('pointerup', up);
+    });
+    r.addEventListener('dblclick', () => set(LAYOUT_DEFAULTS[which === 'filters' ? 'filtersW' : 'detailW']));
+    r.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const step = (e.key === 'ArrowRight' ? 1 : -1) * (which === 'filters' ? 20 : -20);
+      set((which === 'filters' ? layout.filtersW : layout.detailW) + step);
+    });
+  }
+  window.addEventListener('resize', applyLayout);
+  applyLayout();
 }
 
 function fact(label, value, cls = '') {
@@ -444,6 +578,7 @@ function fact(label, value, cls = '') {
 }
 
 function renderDetail() {
+  applyLayout(); // the details pane may need to appear or collapse
   const job = findJob(S.selectedId);
   const el = $('#detail');
   if (!job) {
@@ -470,12 +605,14 @@ function renderDetail() {
 
   el.innerHTML = `
   <div class="detail-inner">
+    <button class="icon-btn pane-close" data-act="close-pane" title="Close (Esc)" aria-label="Close job details">✕</button>
     <button class="btn small back-btn" data-act="close-detail">← Back to results</button>
     <div class="detail-head">
       ${logoHtml(job)}
       <div>
         <div class="detail-title">${esc(job.title)}</div>
         <div class="detail-company">${esc(job.company || 'Unknown company')} ${job.location ? `· ${esc(job.location)}` : ''}</div>
+        ${job.companyBlurb ? `<div class="muted small">${esc(job.companyBlurb)}</div>` : ''}
       </div>
       ${matchRing(m.score, true)}
     </div>
@@ -491,9 +628,13 @@ function renderDetail() {
     </div>
 
     ${job.isNew ? '<div class="callout">🆕 New since your last search.</div>' : ''}
+    ${job.removed ? '<div class="callout error">This posting was not found in your latest search — it may have been filled or taken down. The details below are from your snapshot.</div>' : ''}
 
     <dl class="facts">
       ${fact('Salary', esc(fmtSalary(job.salary) || ''), 'good')}
+      ${fact('Company', job.startup === true ? `🚀 ${esc(job.companyStage || 'Startup')}` : job.startup === false ? 'Established company' : '')}
+      ${fact('Team size', esc(job.companySize || ''))}
+      ${fact('Founded', esc(job.companyFounded ? String(job.companyFounded) : ''))}
       ${fact('Workplace', esc(job.workplace || ''))}
       ${fact('Seniority', esc(job.seniority || ''))}
       ${fact('Experience', esc(exp || ''), expCls)}
@@ -563,6 +704,27 @@ function renderDetail() {
     </div>
   </div>`;
   renderResumeFit(job);
+  if (job.needsDetail) loadJobDetails(job);
+}
+
+// Some career sites (Workday, SmartRecruiters…) list jobs without descriptions; fetch it when opened.
+const detailLoads = new Map();
+async function loadJobDetails(job) {
+  if (detailLoads.has(job.id)) return;
+  detailLoads.set(job.id, true);
+  $('#descText')?.insertAdjacentHTML('beforebegin', '<p class="hint" id="detailLoading"><span class="spinner dark"></span> Loading full posting…</p>');
+  try {
+    const { job: full } = await api('/api/job/details', { method: 'POST', body: { job } });
+    full.isNew = job.isNew;
+    const i = S.jobs.findIndex((j) => j.id === job.id);
+    if (i !== -1) S.jobs[i] = full;
+    if (tracker()[job.id]) { tracker()[job.id].job = snapshot(full); persist(); }
+    updateCard(job.id);
+    if (S.selectedId === job.id) renderDetail();
+  } catch {
+    $('#detailLoading')?.remove();
+    detailLoads.delete(job.id);
+  }
 }
 
 // Instant (non-AI) check of the default resume against the open posting.
@@ -830,9 +992,12 @@ function renderSettings() {
       <span class="status-dot ${s.configured ? 'ok' : 'off'}">${s.configured ? 'ready' : 'needs key'}</span>
     </label>`).join('');
   const co = S.state.companies;
-  $('#coGreenhouse').value = (co.greenhouse || []).join(', ');
-  $('#coLever').value = (co.lever || []).join(', ');
-  $('#coAshby').value = (co.ashby || []).join(', ');
+  const info = S.meta.atsInfo || [];
+  $('#coTotal').textContent = info.reduce((n, a) => n + (co[a.id] || []).length, 0);
+  $('#coLists').innerHTML = info.map((a) => `
+    <label class="field"><span>${esc(a.label)} <span class="muted small">(${(co[a.id] || []).length})</span></span>
+      <textarea data-ats="${a.id}" rows="${Math.min(6, Math.max(2, Math.ceil((co[a.id] || []).length / 4)))}">${esc((co[a.id] || []).join(', '))}</textarea>
+      <small class="hint">e.g. ${esc(a.example)}</small></label>`).join('');
   $('#hiddenCount').textContent = S.state.hidden.length;
 }
 
@@ -890,6 +1055,13 @@ function bindEvents() {
       persist();
       refresh({ resetPage: true });
     }
+    const ct = e.target.closest('#fCompanyType button');
+    if (ct) {
+      filters().companyType = ct.dataset.v;
+      renderFilterControls();
+      persist();
+      refresh({ resetPage: true });
+    }
     const wp = e.target.closest('#fWorkplace button');
     if (wp) {
       filters().workplace = wp.dataset.v;
@@ -932,6 +1104,7 @@ function bindEvents() {
   };
   bindInput('#fLocation', 'location');
   bindInput('#fPosted', 'posted');
+  bindInput('#fStage', 'stage');
   bindInput('#fSalary', 'minSalary');
   bindInput('#fHasSalary', 'hasSalary', (el) => el.checked);
   bindInput('#fSponsor', 'sponsor', (el) => el.checked);
@@ -983,7 +1156,7 @@ function bindEvents() {
     const act = e.target.closest('[data-act]')?.dataset.act;
     const id = S.selectedId;
     if (act === 'hide') hideJob(id);
-    if (act === 'close-detail') detail.classList.remove('open');
+    if (act === 'close-detail' || act === 'close-pane') return closeDetail();
     if (act === 'tailor-resume') {
       showTab('resume');
       resumeMod.show(id);
@@ -1086,15 +1259,52 @@ function bindEvents() {
     profile().sources = [...set];
     persist();
   });
-  const parseTokens = (s) => [...new Set(s.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))];
+  // Entries keep their case (Workday site names are case-sensitive) and may contain spaces ("Bank of America=ghr.wd1/Lateral-US").
+  const parseEntries = (s) => [...new Set(s.split(/[,\n]+/).map((x) => x.trim()).filter(Boolean))];
   $('#saveCompanies').addEventListener('click', () => {
-    S.state.companies = {
-      greenhouse: parseTokens($('#coGreenhouse').value),
-      lever: parseTokens($('#coLever').value),
-      ashby: parseTokens($('#coAshby').value),
-    };
+    for (const ta of $$('#coLists textarea')) S.state.companies[ta.dataset.ats] = parseEntries(ta.value);
     persist();
+    renderSettings();
     toast('Companies saved — run a search to include them');
+  });
+  $('#detectForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = $('#detectInput').value.trim();
+    if (!input) return;
+    const out = $('#detectResult');
+    out.innerHTML = '<p class="hint"><span class="spinner dark"></span> Looking for this company\'s job board…</p>';
+    try {
+      const { found } = await api('/api/companies/detect', { method: 'POST', body: { input } });
+      const isUrl = /[./]/.test(input) && !/\s/.test(input);
+      const name = isUrl ? '' : input.replace(/\b\w/g, (c) => c.toUpperCase());
+      out.innerHTML = found.length
+        ? `<div class="detect-list">${found.map((f, i) => `
+            <div class="detect-item"><div><b>${esc(f.label)}</b> · <code>${esc(f.token)}</code><div class="muted small">${f.jobs.toLocaleString()} open jobs</div></div>
+              <div class="row gap"><input class="detect-name" data-i="${i}" value="${esc(name)}" placeholder="Display name" />
+              <button class="btn small primary" data-add-co="${i}">Add</button></div></div>`).join('')}</div>`
+        : `<div class="callout">Couldn't find a supported job board for “${esc(input)}”. Try pasting the URL of the company's job
+            search page. Some companies (e.g. Walmart, IBM, Qualcomm) use systems that block outside access; their postings
+            often still appear through JSearch.</div>`;
+      out.dataset.found = JSON.stringify(found);
+    } catch (err) {
+      out.innerHTML = `<div class="callout error">${esc(err.message)}</div>`;
+    }
+  });
+  $('#detectResult').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-add-co]');
+    if (!btn) return;
+    const f = JSON.parse($('#detectResult').dataset.found)[Number(btn.dataset.addCo)];
+    const name = $(`.detect-name[data-i="${btn.dataset.addCo}"]`).value.trim();
+    const list = (S.state.companies[f.ats] ||= []);
+    if (list.some((x) => x.split('=').pop() === f.token)) return toast('Already in your list');
+    list.push(name ? `${name}=${f.token}` : f.token);
+    // Make sure the matching source is switched on.
+    if (!profile().sources.includes(f.ats)) profile().sources.push(f.ats);
+    persist();
+    renderSettings();
+    btn.textContent = 'Added ✓';
+    btn.disabled = true;
+    toast(`Added ${name || f.token} — it'll be included in your next search`);
   });
   $('#resetCompanies').addEventListener('click', () => {
     S.state.companies = structuredClone(S.meta.defaultCompanies);
@@ -1133,7 +1343,9 @@ function bindEvents() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       help.classList.add('hidden');
-      $('#detail').classList.remove('open');
+      $('#snapModal').classList.add('hidden');
+      $('#layoutMenu').classList.add('hidden');
+      if (!e.target.closest('input, textarea, select') && S.selectedId) closeDetail();
       if (document.activeElement?.blur) document.activeElement.blur();
       return;
     }
@@ -1174,6 +1386,16 @@ function normalizeState() {
   st.profile.years ??= '';
   // Switch on API sources the first time their key is configured (once, so the
   // user can still turn them off afterwards).
+  // Free sources added in an app update start switched on (once); sources the user turned off stay off.
+  const ORIGINAL_SOURCES = ['remotive', 'remoteok', 'jobicy', 'himalayas', 'workingnomads', 'arbeitnow', 'themuse',
+    'hackernews', 'greenhouse', 'lever', 'ashby', 'jsearch', 'adzuna', 'usajobs'];
+  st.profile.knownSources ||= ORIGINAL_SOURCES;
+  for (const s of S.meta.sources) {
+    if (!st.profile.knownSources.includes(s.id)) {
+      if (!s.needsKey && !st.profile.sources.includes(s.id)) st.profile.sources.push(s.id);
+      st.profile.knownSources.push(s.id);
+    }
+  }
   st.profile.autoEnabled ||= [];
   for (const s of S.meta.sources) {
     if (s.needsKey && s.configured && !st.profile.autoEnabled.includes(s.id)) {
@@ -1216,8 +1438,160 @@ async function init() {
   $('#skillCatalog').innerHTML = S.meta.skills.map((s) => `<option value="${esc(s.name)}">${esc(s.category)}</option>`).join('');
   resumeMod = initResume({ S, $, $$, api, persist, esc, toast, findJob, safeUrl, download, showTab, selectJob });
   bindEvents();
+  bindSnapshots();
+  bindLayout();
   renderAll();
-  if (profile().roles.length) search();
+  // Show the previous search's results instead of searching again on every launch:
+  // re-searching spends quota on JSearch and other keyed APIs.
+  await loadLastResults();
+}
+
+// ---------------------------------------------------------------- snapshots
+
+function sameRoles(a = [], b = []) {
+  return a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|');
+}
+
+function defaultSnapshotName() {
+  const roles = profile().roles.slice(0, 3).map(roleLabel).join(', ');
+  const level = filters().seniority.length ? ` (${filters().seniority.join('/')})` : '';
+  return `${roles}${level} — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+}
+
+async function openSnapshots() {
+  const pendingDetails = S.filtered.filter((j) => j.needsDetail).length;
+  $('#snapName').value = defaultSnapshotName();
+  $('#snapForm').classList.toggle('hidden', !S.jobs.length);
+  $('#snapDetailsLabel').textContent = pendingDetails
+    ? `Also download full descriptions for the ${Math.min(pendingDetails, 300)} jobs matching your filters that don't have one yet${pendingDetails > 300 ? ' (first 300)' : ''}`
+    : 'All jobs matching your filters already have their full descriptions';
+  $('#snapDetails').disabled = !pendingDetails;
+  $('#snapModal').classList.remove('hidden');
+  await renderSnapshotList();
+}
+
+async function renderSnapshotList() {
+  const list = await api('/api/snapshots');
+  $('#snapList').innerHTML = list.length ? list.map((s) => `
+    <div class="snap-item ${S.snapshot?.id === s.id ? 'current' : ''}">
+      <div><b>${esc(s.name)}</b>
+        <div class="muted small">${s.count.toLocaleString()} jobs · saved ${fmtDate(s.createdAt)} (${timeAgo(s.createdAt)})${s.location ? ` · ${esc(s.location)}` : ''}</div></div>
+      <div class="row gap">
+        <button class="btn small primary" data-snap-open="${esc(s.id)}">${S.snapshot?.id === s.id ? 'Viewing' : 'Open'}</button>
+        <button class="btn small danger" data-snap-del="${esc(s.id)}" title="Delete snapshot">Delete</button>
+      </div>
+    </div>`).join('') : '<p class="hint">No snapshots yet.</p>';
+}
+
+async function saveSnapshot() {
+  const btn = $('#snapSave');
+  btn.disabled = true;
+  const withDetails = $('#snapDetails').checked && !$('#snapDetails').disabled;
+  btn.innerHTML = `<span class="spinner"></span> ${withDetails ? 'Downloading descriptions…' : 'Saving…'}`;
+  try {
+    const meta = await api('/api/snapshots', {
+      method: 'POST',
+      body: {
+        name: $('#snapName').value.trim() || defaultSnapshotName(),
+        jobs: S.jobs,
+        sources: S.sourceResults,
+        fetchedAt: S.fetchedAt,
+        roles: S.snapshot?.roles || profile().roles,
+        location: filters().location,
+        detailIds: withDetails ? S.filtered.filter((j) => j.needsDetail).map((j) => j.id) : [],
+      },
+    });
+    toast(`Saved “${meta.name}” — ${meta.count.toLocaleString()} jobs${meta.detailsFetched ? `, ${meta.detailsFetched} descriptions downloaded` : ''}`);
+    await renderSnapshotList();
+  } catch (e) {
+    toast(`Couldn't save snapshot: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save snapshot';
+  }
+}
+
+async function openSnapshot(id) {
+  const { meta, jobs, sources } = await api(`/api/snapshots/${id}`);
+  // If you've searched the same positions since this snapshot, flag postings that have disappeared.
+  let compared = false;
+  try {
+    const latest = await api('/api/results/last');
+    if (latest.fetchedAt && latest.fetchedAt > meta.createdAt && sameRoles(latest.roles, meta.roles)) {
+      const current = new Set(latest.jobs.map((j) => j.id));
+      const searched = new Set((latest.sources || []).filter((s) => !s.error).map((s) => s.id));
+      for (const j of jobs) j.removed = searched.has(j.source) && !current.has(j.id);
+      compared = true;
+    }
+  } catch { /* no latest results to compare with */ }
+  for (const j of jobs) j.isNew = false;
+  S.jobs = jobs;
+  S.sourceResults = sources || [];
+  S.fetchedAt = meta.fetchedAt || meta.createdAt;
+  S.snapshot = { ...meta, compared };
+  S.onlyRemoved = false;
+  S.restored = false;
+  S.selectedId = null;
+  renderDetail();
+  refresh({ resetPage: true });
+  $('#snapModal').classList.add('hidden');
+}
+
+function renderSnapshotBanner() {
+  const s = S.snapshot;
+  const el = $('#snapBanner');
+  el.classList.toggle('hidden', !s);
+  if (!s) return;
+  const removed = S.jobs.filter((j) => j.removed).length;
+  el.innerHTML = `<span>📸 Viewing snapshot <b>${esc(s.name)}</b> · saved ${fmtDate(s.createdAt)} · ${s.count.toLocaleString()} jobs
+    ${s.compared && removed ? ` · <button class="link-btn" data-snap-removed>${S.onlyRemoved ? 'Show all jobs' : `Show the ${removed.toLocaleString()} no longer listed`}</button>` : ''}
+    ${s.compared && !removed ? ' · all still listed in your latest search' : ''}</span>
+    <button class="btn small" data-snap-exit>Back to latest results</button>`;
+}
+
+function bindSnapshots() {
+  $('#snapBtn').addEventListener('click', openSnapshots);
+  $('#snapForm').addEventListener('submit', (e) => { e.preventDefault(); saveSnapshot(); });
+  $('#snapModal').addEventListener('click', async (e) => {
+    if (e.target === $('#snapModal') || e.target.matches('[data-close]')) $('#snapModal').classList.add('hidden');
+    const open = e.target.closest('[data-snap-open]');
+    if (open) await openSnapshot(open.dataset.snapOpen).catch((err) => toast(err.message));
+    const del = e.target.closest('[data-snap-del]');
+    if (del && confirm('Delete this snapshot? This can\'t be undone.')) {
+      await api(`/api/snapshots/${del.dataset.snapDel}`, { method: 'DELETE' });
+      if (S.snapshot?.id === del.dataset.snapDel) { S.snapshot = null; await loadLastResults(); }
+      await renderSnapshotList();
+    }
+  });
+  $('#snapBanner').addEventListener('click', async (e) => {
+    if (e.target.matches('[data-snap-removed]')) {
+      S.onlyRemoved = !S.onlyRemoved;
+      refresh({ resetPage: true });
+      return;
+    }
+    if (!e.target.matches('[data-snap-exit]')) return;
+    S.onlyRemoved = false;
+    S.snapshot = null;
+    S.selectedId = null;
+    renderDetail();
+    await loadLastResults();
+    refresh({ resetPage: true });
+  });
+}
+
+async function loadLastResults() {
+  try {
+    const res = await api('/api/results/last');
+    if (!res.jobs?.length) return;
+    for (const j of res.jobs) j.isNew = !!S.sinceVisit && j.firstSeen > S.sinceVisit;
+    S.jobs = res.jobs;
+    S.sourceResults = res.sources || [];
+    S.fetchedAt = res.fetchedAt;
+    S.restored = true;
+    refresh({ resetPage: true });
+  } catch {
+    /* no saved results yet — wait for the user to search */
+  }
 }
 
 init();

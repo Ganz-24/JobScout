@@ -431,3 +431,83 @@ textarea.tailored { min-height: 520px; font: 13px/1.55 ui-monospace, "Cascadia C
   .resume-editor { position: static; }
   #resumeText { min-height: 320px; }
 }
+
+/* ---------------------------------------------------------------- company detection */
+.detect-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+.detect-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.detect-item code { word-break: break-all; }
+.detect-name { width: 170px; }
+.co-lists { margin: 10px 0; }
+.co-lists summary { cursor: pointer; font-weight: 600; color: var(--text-2); padding: 4px 0; }
+.co-lists textarea { font: 12.5px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; }
+#detectResult .callout { margin-top: 8px; }
+
+.badge.startup { background: var(--accent-soft); color: var(--accent-ink); text-transform: none; letter-spacing: 0; font-weight: 600; }
+
+/* ---------------------------------------------------------------- snapshots */
+.snap-banner { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+  padding: 9px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-ink); font-size: 13px; }
+.snap-card { width: min(620px, 100%); max-height: 85vh; overflow-y: auto; }
+.snap-form { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; }
+.snap-form .btn { align-self: flex-start; }
+.snap-list-title { margin: 6px 0 8px; }
+.snap-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.snap-item:last-child { border-bottom: 0; }
+.snap-item.current b { color: var(--accent); }
+.badge.removed { background: var(--bad-soft); color: var(--bad); }
+.results-controls { flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- customizable layout */
+/* Column widths are set from app.js (applyLayout); these classes switch the modes. */
+.resizer { position: relative; cursor: col-resize; touch-action: none; z-index: 5; }
+.resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: transparent; transition: background 0.15s; }
+.resizer:hover::after, .resizer:focus-visible::after, body.resizing .resizer.active::after { background: var(--accent); }
+.resizer:focus-visible { outline: none; }
+body.resizing { cursor: col-resize; user-select: none; }
+#tab-discover > .filters, #tab-discover > .detail { border: 0; }
+#rszFilters { border-left: 1px solid var(--border); margin-left: -1px; }
+#rszDetail { border-right: 1px solid var(--border); }
+
+body.filters-hidden #tab-discover > .filters, body.filters-hidden #rszFilters { display: none; }
+body.detail-hidden #tab-discover > .detail, body.detail-hidden #rszDetail { display: none; }
+body.detail-drawer #rszDetail { display: none; }
+body.detail-drawer .detail {
+  position: fixed; top: 55px; right: 0; bottom: 0; width: min(var(--detail-w, 600px), 100%); z-index: 30;
+  box-shadow: var(--shadow-lg); transform: translateX(100%); transition: transform 0.2s; border-left: 1px solid var(--border);
+}
+body.detail-drawer .detail.open { transform: none; }
+body.detail-drawer .back-btn { display: inline-flex; }
+
+.pane-close { position: absolute; top: 12px; right: 12px; z-index: 2; }
+.detail-inner { position: relative; }
+.detail-head { padding-right: 36px; }
+
+#filtersToggle { white-space: nowrap; }
+#filtersToggle.on { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
+
+.layout-wrap { position: relative; }
+.layout-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); width: 300px; z-index: 50; padding: 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+}
+.layout-menu h2 { margin-bottom: 6px; }
+.layout-menu .field { margin: 8px 0; }
+#layoutBtn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent-ink); }
+
+/* Compact cards: fit more jobs on screen. */
+body.density-compact .job-list { gap: 4px; }
+body.density-compact .job-card { padding: 7px 10px; grid-template-columns: 28px 1fr auto; gap: 10px; }
+body.density-compact .job-card .logo { width: 28px; height: 28px; font-size: 13px; }
+body.density-compact .job-title { font-size: 13.5px; }
+body.density-compact .job-company { font-size: 12px; margin-top: 0; }
+body.density-compact .job-meta { margin-top: 2px; }
+body.density-compact .job-skills { display: none; }
+body.density-compact .job-side { flex-direction: row; align-items: center; gap: 8px; }
+body.density-compact .match { width: 32px; height: 32px; }
+body.density-compact .match::before { inset: 3px; }
+body.density-compact .match span { font-size: 10px; }
+
+@media (max-width: 760px) {
+  .resizer { display: none; }
+  #tab-discover { grid-template-columns: 1fr !important; }
+}

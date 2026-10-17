@@ -11,9 +11,11 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(ROOT, '.env'));
 
 const { SOURCES, DEFAULT_COMPANIES } = await import('./lib/sources.js');
+const { ATS_INFO, detectCompany, fetchDetails } = await import('./lib/ats.js');
+const { classifyCompanies } = await import('./lib/startups.js');
 const { ROLE_PRESETS, resolveRole } = await import('./lib/roles.js');
 const { enrichJob, SKILL_CATALOG } = await import('./lib/enrich.js');
-const { clearCache, normalizeKey } = await import('./lib/util.js');
+const { clearCache, clearPersistentCache, usePersistentCache, normalizeKey, mapLimit } = await import('./lib/util.js');
 // Resume tools need the Anthropic SDK (npm install). Load them so the job search
 // still works if dependencies haven't been installed yet.
 let resumeLib = null;
@@ -28,6 +30,8 @@ const PUBLIC = path.join(ROOT, 'public');
 const DATA = process.env.JOBSCOUT_DATA_DIR ? path.resolve(process.env.JOBSCOUT_DATA_DIR) : path.join(ROOT, 'data');
 const STATE_FILE = path.join(DATA, 'state.json');
 const SEEN_FILE = path.join(DATA, 'seen.json');
+const RESULTS_FILE = path.join(DATA, 'last-results.json');
+usePersistentCache(path.join(DATA, 'api-cache.json'));
 const SOURCE_TIMEOUT = 90_000;
 const MAX_DESCRIPTION = 20_000;
 
@@ -67,14 +71,16 @@ async function readJson(file, fallback) {
 
 // Serialize writes so concurrent requests can't interleave and corrupt the file.
 let writeChain = Promise.resolve();
-function writeJson(file, value) {
-  writeChain = writeChain.then(async () => {
-    await fs.mkdir(DATA, { recursive: true });
+function writeJson(file, value, { compact = false } = {}) {
+  const write = writeChain.then(async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(value, null, 2));
+    await fs.writeFile(tmp, compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
     await fs.rename(tmp, file);
   });
-  return writeChain;
+  // One failed write must not block every write after it.
+  writeChain = write.catch(() => {});
+  return write;
 }
 
 async function readState() {
@@ -113,15 +119,27 @@ function dedupe(jobs) {
     }
     keep.roles = [...new Set([...(keep.roles || []), ...(other.roles || [])])];
     keep.salary = keep.salary || other.salary;
+    keep.startup ??= other.startup;
+    keep.companyStage ||= other.companyStage;
+    keep.companyBlurb ||= other.companyBlurb;
     keep.postedAt = [keep.postedAt, other.postedAt].filter(Boolean).sort().pop() || null;
     byKey.set(key, keep);
   }
   return [...byKey.values()];
 }
 
-async function runSearch({ roles = [], sources = [], location = '' }) {
+// When the user only wants internships / entry-level roles, ask keyword-search sites for
+// those specifically ("software intern") instead of "software", which mostly returns senior roles.
+const LEVEL_SUFFIX = { Intern: 'intern', Entry: 'new grad' };
+function levelVariants(resolved, levels = []) {
+  const suffixes = levels.length && levels.every((l) => LEVEL_SUFFIX[l]) ? levels.map((l) => LEVEL_SUFFIX[l]) : [];
+  if (!suffixes.length) return resolved;
+  return resolved.flatMap((r) => suffixes.map((s) => (r.query.toLowerCase().includes(s) ? r : { ...r, query: `${r.query} ${s}` })));
+}
+
+async function runSearch({ roles = [], sources = [], location = '', levels = [] }) {
   const state = await readState();
-  const resolved = roles.map(resolveRole);
+  const resolved = levelVariants(roles.map(resolveRole), levels);
   if (!resolved.length) return { jobs: [], sources: [], fetchedAt: new Date().toISOString() };
 
   const active = SOURCES.filter((s) => sources.includes(s.id) && s.configured());
@@ -147,7 +165,7 @@ async function runSearch({ roles = [], sources = [], location = '' }) {
       all.push(enrichJob({ ...j, description, source: r.src.id, sourceName }));
     }
   }
-  const jobs = dedupe(all);
+  const jobs = classifyCompanies(dedupe(all));
 
   // Record when each posting was first seen; the client compares this with the
   // user's previous visit to badge postings as "new".
@@ -161,13 +179,17 @@ async function runSearch({ roles = [], sources = [], location = '' }) {
   for (const [id, ts] of Object.entries(seen)) if (new Date(ts).getTime() < cutoff) delete seen[id];
   await writeJson(SEEN_FILE, seen);
 
-  return {
+  const result = {
     jobs,
     fetchedAt: now,
+    roles,
     sources: results.map((r) => ({
       id: r.src.id, name: r.src.name, count: r.jobs.length, ms: r.ms, error: r.error || null, warning: r.warning || null,
     })),
   };
+  // Keep the latest results on disk so reopening the app shows them without searching again.
+  await writeJson(RESULTS_FILE, result, { compact: true });
+  return result;
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -182,15 +204,65 @@ function send(res, status, body, type = 'application/json') {
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
 
-async function readBody(req) {
+async function readBody(req, limitMb = 20) {
   const chunks = [];
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > 20 * 1024 * 1024) throw new Error('Body too large');
+    if (size > limitMb * 1024 * 1024) throw new Error('Body too large');
     chunks.push(c);
   }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+}
+
+// ---------------------------------------------------------------- snapshots
+
+// A snapshot is a saved copy of a search's results (data/snapshots/<id>.json) that can be
+// reopened later without searching again — and still read after postings are taken down.
+const SNAP_DIR = path.join(DATA, 'snapshots');
+const SNAP_INDEX = path.join(SNAP_DIR, 'index.json');
+const MAX_SNAPSHOT_DETAILS = 300;
+
+async function listSnapshots() {
+  return readJson(SNAP_INDEX, []);
+}
+
+// Fill in full descriptions for postings that were listed without one (Workday etc.).
+async function fillDetails(job) {
+  const full = await fetchDetails(job);
+  const description = (full.description || '').slice(0, MAX_DESCRIPTION);
+  return { ...enrichJob({ ...full, description }), source: job.source, sourceName: job.sourceName,
+    roles: job.roles, alsoOn: job.alsoOn, firstSeen: job.firstSeen };
+}
+
+async function saveSnapshot({ name, jobs = [], sources = [], fetchedAt, roles = [], location = '', detailIds = [] }) {
+  const wanted = new Set(detailIds.slice(0, MAX_SNAPSHOT_DETAILS));
+  const toFill = jobs.filter((j) => j.needsDetail && wanted.has(j.id));
+  const filled = await mapLimit(toFill, 6, fillDetails);
+  const byId = new Map(toFill.map((j, i) => [j.id, filled[i] instanceof Error ? j : filled[i]]));
+  const finalJobs = jobs.map((j) => {
+    const { _match, isNew, ...rest } = byId.get(j.id) || j;
+    return rest;
+  });
+  const meta = {
+    id: `s${Date.now().toString(36)}`,
+    name: String(name || 'Snapshot').slice(0, 120),
+    createdAt: new Date().toISOString(),
+    fetchedAt: fetchedAt || null,
+    count: finalJobs.length,
+    detailsFetched: filled.filter((f) => !(f instanceof Error)).length,
+    roles,
+    location,
+  };
+  await writeJson(path.join(SNAP_DIR, `${meta.id}.json`), { meta, jobs: finalJobs, sources }, { compact: true });
+  await writeJson(SNAP_INDEX, [meta, ...(await listSnapshots())]);
+  return meta;
+}
+
+async function deleteSnapshot(id) {
+  if (!/^s[a-z0-9]+$/.test(id)) throw new Error('Bad snapshot id');
+  await writeJson(SNAP_INDEX, (await listSnapshots()).filter((s) => s.id !== id));
+  await fs.rm(path.join(SNAP_DIR, `${id}.json`), { force: true });
 }
 
 const server = http.createServer(async (req, res) => {
@@ -204,6 +276,7 @@ const server = http.createServer(async (req, res) => {
         })),
         skills: SKILL_CATALOG,
         defaultCompanies: DEFAULT_COMPANIES,
+        atsInfo: ATS_INFO,
         ai: {
           installed: !!resumeLib,
           configured: !!resumeLib?.aiConfigured(),
@@ -240,8 +313,36 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/search' && req.method === 'POST') {
       return send(res, 200, await runSearch(await readBody(req)));
     }
+    if (url.pathname === '/api/companies/detect' && req.method === 'POST') {
+      const { input } = await readBody(req);
+      return send(res, 200, { found: await detectCompany(input) });
+    }
+    if (url.pathname === '/api/job/details' && req.method === 'POST') {
+      // Load the full description for a posting that was listed without one (Workday etc.).
+      const { job } = await readBody(req);
+      return send(res, 200, { job: await fillDetails(job) });
+    }
+    if (url.pathname === '/api/snapshots' && req.method === 'GET') return send(res, 200, await listSnapshots());
+    if (url.pathname === '/api/snapshots' && req.method === 'POST') {
+      return send(res, 200, await saveSnapshot(await readBody(req, 300)));
+    }
+    const snap = url.pathname.match(/^\/api\/snapshots\/(s[a-z0-9]+)$/);
+    if (snap && req.method === 'GET') {
+      const data = await readJson(path.join(SNAP_DIR, `${snap[1]}.json`), null);
+      return data ? send(res, 200, data) : send(res, 404, { error: 'Snapshot not found' });
+    }
+    if (snap && req.method === 'DELETE') {
+      await deleteSnapshot(snap[1]);
+      return send(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/results/last' && req.method === 'GET') {
+      return send(res, 200, await readJson(RESULTS_FILE, { jobs: [], sources: [], fetchedAt: null }));
+    }
     if (url.pathname === '/api/refresh' && req.method === 'POST') {
+      // Free feeds are always re-fetched; quota-limited APIs only when explicitly asked.
+      const { includePaid = false } = await readBody(req);
       clearCache();
+      if (includePaid) clearPersistentCache();
       return send(res, 200, { ok: true });
     }
     if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' });

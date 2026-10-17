@@ -22,6 +22,22 @@
     </nav>
     <div class="topbar-actions">
       <button class="icon-btn" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+      <div class="layout-wrap">
+        <button class="icon-btn" id="layoutBtn" title="Customize layout" aria-label="Customize layout" aria-expanded="false">▥</button>
+        <div class="layout-menu hidden" id="layoutMenu" role="dialog" aria-label="Layout">
+          <h2>Layout</h2>
+          <div class="field"><span>Job details pane</span>
+            <div class="segmented" data-layout="detail">
+              <button data-v="auto" title="Only shows when a job is open">Auto</button><button data-v="side">Side panel</button><button data-v="drawer">Pop-over</button>
+            </div></div>
+          <div class="field"><span>Filters sidebar</span>
+            <div class="segmented" data-layout="filters"><button data-v="show">Show</button><button data-v="hidden">Hide</button></div></div>
+          <div class="field"><span>Job cards</span>
+            <div class="segmented" data-layout="density"><button data-v="comfortable">Comfortable</button><button data-v="compact">Compact</button></div></div>
+          <p class="hint">Drag the dividers between columns to resize them.</p>
+          <button class="link-btn" id="layoutReset">Reset layout</button>
+        </div>
+      </div>
       <button class="icon-btn" id="helpBtn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
     </div>
   </header>
@@ -78,6 +94,20 @@
             <button data-v="any" class="on">Any</button><button data-v="Remote">Remote</button><button data-v="Hybrid">Hybrid</button><button data-v="On-site">On-site</button>
           </div>
         </div>
+        <div class="field">
+          <span>Company type</span>
+          <div class="segmented" id="fCompanyType">
+            <button data-v="any" class="on">Any</button><button data-v="startup">Startups</button><button data-v="established">Big companies</button>
+          </div>
+        </div>
+        <label class="field" id="fStageWrap">
+          <span>Startup stage</span>
+          <select id="fStage">
+            <option value="any">Any stage</option>
+            <option value="early">Early (pre-seed, seed, Series A, YC)</option>
+            <option value="growth">Growth (Series B and later)</option>
+          </select>
+        </label>
         <label class="field">
           <span>Posted within</span>
           <select id="fPosted">
@@ -108,6 +138,7 @@
         <button class="link-btn" id="resetFilters">Reset filters</button>
       </section>
     </aside>
+    <div class="resizer" id="rszFilters" data-resize="filters" role="separator" aria-orientation="vertical" aria-label="Resize filters" tabindex="0"></div>
 
     <section class="results">
       <div class="results-head">
@@ -116,6 +147,7 @@
           <p class="muted" id="resultsSub">Pick positions on the left and hit <b>Search jobs</b>.</p>
         </div>
         <div class="results-controls">
+          <button class="btn icon-only" id="filtersToggle" title="Show or hide filters">☰ Filters</button>
           <input id="fText" class="search-within" type="search" placeholder="Filter results… ( / )" />
           <select id="sortBy" aria-label="Sort by">
             <option value="match">Best match</option>
@@ -123,13 +155,16 @@
             <option value="salary">Highest salary</option>
             <option value="company">Company A–Z</option>
           </select>
+          <button class="btn" id="snapBtn" title="Save or open snapshots of search results">📸 Snapshots</button>
         </div>
       </div>
+      <div id="snapBanner" class="snap-banner hidden"></div>
       <div class="source-strip" id="sourceStrip"></div>
       <div id="jobList" class="job-list"></div>
       <div id="listFooter" class="list-footer"></div>
     </section>
 
+    <div class="resizer" id="rszDetail" data-resize="detail" role="separator" aria-orientation="vertical" aria-label="Resize job details" tabindex="0"></div>
     <section class="detail" id="detail" aria-live="polite">
       <div class="empty-detail">
         <div class="empty-icon">⌕</div>
@@ -225,12 +260,19 @@
       </section>
       <section class="panel">
         <h2>Company career pages</h2>
-        <p class="hint">Board names from each company's careers URL, comma-separated, e.g.
-          <code>boards.greenhouse.io/<b>stripe</b></code>, <code>jobs.lever.co/<b>palantir</b></code>,
-          <code>jobs.ashbyhq.com/<b>openai</b></code>.</p>
-        <label class="field"><span>Greenhouse</span><textarea id="coGreenhouse" rows="4"></textarea></label>
-        <label class="field"><span>Lever</span><textarea id="coLever" rows="2"></textarea></label>
-        <label class="field"><span>Ashby</span><textarea id="coAshby" rows="3"></textarea></label>
+        <form class="inline-form" id="detectForm">
+          <input id="detectInput" placeholder="Company name or careers page URL, e.g. AMD or jobs.dell.com" autocomplete="off" />
+          <button class="btn small primary" type="submit">Find jobs</button>
+        </form>
+        <p class="hint">Works for companies on Workday, Greenhouse, Lever, Ashby, iCIMS/Jibe, SmartRecruiters, Oracle, Workable
+          and Recruitee. If a name doesn't work, paste the URL of the company's job search page.</p>
+        <div id="detectResult"></div>
+        <details class="co-lists">
+          <summary>Edit company lists (<span id="coTotal">0</span> companies)</summary>
+          <p class="hint">One entry per company, separated by commas or new lines. Use <code>Name=board</code> to set the
+            display name.</p>
+          <div id="coLists"></div>
+        </details>
         <div class="row gap">
           <button class="btn primary" id="saveCompanies">Save companies</button>
           <button class="btn" id="resetCompanies">Reset to defaults</button>
@@ -271,6 +313,22 @@
         <tr><td><kbd>Esc</kbd></td><td>Close</td></tr>
       </table>
       <button class="btn" data-close>Close</button>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="snapModal" role="dialog" aria-modal="true" aria-labelledby="snapTitle">
+    <div class="modal-card snap-card">
+      <h2 id="snapTitle">Snapshots</h2>
+      <p class="hint">Save the current results so you can reopen them later without searching again. Snapshots keep each
+        posting's details, so you can still read a posting after the company takes it down.</p>
+      <form id="snapForm" class="snap-form">
+        <input id="snapName" placeholder="Snapshot name" autocomplete="off" />
+        <label class="check"><input type="checkbox" id="snapDetails" checked /> <span id="snapDetailsLabel"></span></label>
+        <button class="btn primary" type="submit" id="snapSave">Save snapshot</button>
+      </form>
+      <h2 class="snap-list-title">Saved snapshots</h2>
+      <div id="snapList"></div>
+      <div class="row gap" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-close>Close</button></div>
     </div>
   </div>
 

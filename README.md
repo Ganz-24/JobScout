@@ -23,10 +23,20 @@ Then open http://localhost:3000.
 | The Muse | Large US employers |
 | Arbeitnow | Europe / Germany |
 | Hacker News "Who is Hiring" | Startups (latest monthly thread) |
-| Greenhouse, Lever, Ashby career pages | ~65 tech companies by default (Stripe, Airbnb, OpenAI, Anthropic, Figma, Databricks, …). Edit the list in **Settings**. |
+| Y Combinator jobs | YC-funded startups, with batch, salary and visa info |
+| VC portfolio boards | Startups backed by Accel, General Catalyst, Khosla, Thrive, 8VC, Craft, SV Angel, Techstars, Real Ventures, Maveron (pre-seed to Series D only) |
+| Internship & new-grad lists | SimplifyJobs' community lists (thousands of internships and new-grad roles) |
+| Greenhouse, Lever, Ashby career pages | ~65 tech companies by default (Stripe, Airbnb, OpenAI, Anthropic, Figma, Databricks, …) |
+| Workday career sites | 53 large employers by default (NVIDIA, Intel, Salesforce, Adobe, Cisco, Capital One, Boeing, Bank of America, …) |
+| iCIMS/Jibe, SmartRecruiters, Oracle, Workable, Recruitee | AMD, ServiceNow, Bosch, Canva, JPMorgan Chase, Oracle, Dell, … |
+| Amazon Jobs, Google Careers | Their own career sites (incl. AWS, Audible, YouTube, DeepMind) |
 | JSearch *(optional key)* | LinkedIn, Indeed, Glassdoor, ZipRecruiter |
 | Adzuna *(optional key)* | Broad aggregator, many countries |
 | USAJOBS *(optional key)* | US federal government |
+
+**Add any company** in **Settings → Company career pages**: type a name (e.g. `AMD`) or paste the company's job
+search URL (e.g. `jobs.dell.com`) and JobScout detects which system it uses. A few companies (e.g. Walmart, IBM,
+Qualcomm) use systems that block outside access; their postings often still show up through JSearch.
 
 LinkedIn, Indeed and Glassdoor block scraping and prohibit it in their terms, so JobScout reaches them
 through the JSearch API instead. Copy `.env.example` to `.env`, add a free key, and restart.
@@ -44,6 +54,9 @@ Results are cached in memory for 20–30 minutes so repeat searches are fast. Us
 - **Filters**: location, remote/hybrid/on-site, date posted, seniority, minimum salary, visa sponsorship,
   clearance, excluded title words and companies, and "new since last visit".
 - **De-duplication**: the same job on several boards is merged ("Also listed on…").
+- **Snapshots**: save a search's results under a name (optionally downloading full descriptions) and reopen them
+  later without searching. If you've searched the same positions since, postings that have disappeared are flagged
+  "No longer listed", and you can still read them. Your latest search is also reopened automatically on launch.
 - **Application tracker**: a Kanban board (Saved → Applied → Interviewing → Offer / Rejected) with notes,
   drag and drop, response-rate stats and CSV export.
 - **Resume studio**: paste or upload your resume (PDF, Word, text), then pick any posting:
